@@ -3,6 +3,9 @@
 .swiftpm/
 Package.resolved
 
+# Build products
+/build/
+
 # Xcode
 DerivedData/
 *.xcuserstate
