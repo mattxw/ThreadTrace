@@ -26,46 +26,113 @@ enum StackUnwinder {
     /// Unwinds the stack described by `registers`, collecting at most `limit`
     /// instruction addresses.
     static func unwind(from registers: RegisterSnapshot, limit: Int) -> Result {
+        // `reserveCapacity` traps on a negative value, so reject an exhausted
+        // or nonsensical budget before allocating anything.
+        guard limit > 0 else {
+            return Result(addresses: [], isTruncated: true)
+        }
+
         var addresses: [UInt] = []
         addresses.reserveCapacity(limit)
 
         if registers.programCounter != 0 {
             addresses.append(registers.programCounter)
         }
-        if addresses.count < limit, registers.linkRegister != 0 {
-            addresses.append(registers.linkRegister)
-        }
-
-        let firstFrame = registers.framePointer
-        guard firstFrame != 0 else {
+        guard addresses.count < limit else {
             return Result(addresses: addresses, isTruncated: true)
         }
 
+        let firstFrame = registers.framePointer
+        if firstFrame == 0 {
+            appendLinkRegister(from: registers, link: nil, to: &addresses, limit: limit)
+            return Result(addresses: addresses, isTruncated: true)
+        }
+        guard let firstLink = readFrameLink(at: firstFrame) else {
+            appendLinkRegister(from: registers, link: nil, to: &addresses, limit: limit)
+            return Result(addresses: addresses, isTruncated: true)
+        }
+
+        appendLinkRegister(from: registers, link: firstLink, to: &addresses, limit: limit)
+
+        let isTruncated = appendFrames(
+            startingAt: firstFrame,
+            firstLink: firstLink,
+            limit: limit,
+            addresses: &addresses
+        )
+        return Result(addresses: addresses, isTruncated: isTruncated)
+    }
+
+    /// Appends the frame chain that starts at `firstFrame`, returning whether
+    /// the budget, a cycle or an unreadable link ended the walk early.
+    private static func appendFrames(
+        startingAt firstFrame: UInt,
+        firstLink: FrameLink,
+        limit: Int,
+        addresses: inout [UInt]
+    ) -> Bool {
         var visitedFrames: Set<UInt> = []
         var frameAddress = firstFrame
+        var pendingLink: FrameLink? = firstLink
 
         while addresses.count < limit {
             guard visitedFrames.insert(frameAddress).inserted else {
-                return Result(addresses: addresses, isTruncated: true)
+                return true
             }
-            guard let link = readFrameLink(at: frameAddress) else {
-                return Result(addresses: addresses, isTruncated: true)
+            guard let link = pendingLink ?? readFrameLink(at: frameAddress) else {
+                return true
             }
-            guard link.returnAddress != 0 else {
-                return Result(addresses: addresses, isTruncated: false)
-            }
+            pendingLink = nil
 
+            guard link.returnAddress != 0 else {
+                return false
+            }
             addresses.append(link.returnAddress)
 
             guard link.callerFrame != 0 else {
-                return Result(addresses: addresses, isTruncated: false)
+                return false
             }
             frameAddress = link.callerFrame
         }
 
-        return Result(addresses: addresses, isTruncated: true)
+        return true
     }
 
+    /// Adds the link register as the caller of a leaf frame, when the budget
+    /// allows it and the register holds a usable address.
+    ///
+    /// A leaf function has no frame record of its own, so the link register is
+    /// the only source for its caller. When the frame record already holds
+    /// that same return address, the caller did establish a frame and adding
+    /// the register would duplicate the next frame. A register that still
+    /// points into the sampled function itself is stale and is rejected too.
+    private static func appendLinkRegister(
+        from registers: RegisterSnapshot,
+        link: FrameLink?,
+        to addresses: inout [UInt],
+        limit: Int
+    ) {
+        guard addresses.count < limit, registers.linkRegister != 0 else {
+            return
+        }
+        guard addresses.last != registers.linkRegister else {
+            return
+        }
+        if let link {
+            if link.returnAddress == registers.linkRegister {
+                return
+            }
+            if Symbolication.isSameSymbol(registers.programCounter, registers.linkRegister) {
+                return
+            }
+        }
+        addresses.append(registers.linkRegister)
+    }
+
+    /// Copies a frame link out of the stack through the kernel instead of
+    /// dereferencing `address` in-process. A stale or unmapped frame pointer
+    /// therefore fails the read rather than trapping the process, which is
+    /// essential when the target thread is still running.
     private static func readFrameLink(at address: UInt) -> FrameLink? {
         var link = FrameLink(callerFrame: 0, returnAddress: 0)
         var bytesRead: vm_size_t = 0

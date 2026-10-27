@@ -12,7 +12,7 @@ import Darwin
 /// Unlike `pthread_main_np()`, which reports whether the *calling* thread is
 /// the main thread, this works from any thread.
 @_silgen_name("pthread_main_thread_np")
-private func mainThreadPthread() -> pthread_t
+private func mainThreadPthread() -> pthread_t?
 
 /// Access to mach thread ports and their register state.
 enum MachThread {
@@ -20,7 +20,10 @@ enum MachThread {
 
     /// The port of the process' main thread.
     static var main: Port? {
-        let port = pthread_mach_thread_np(mainThreadPthread())
+        guard let pthread = mainThreadPthread() else {
+            return nil
+        }
+        let port = pthread_mach_thread_np(pthread)
         return port == MACH_PORT_NULL ? nil : port
     }
 

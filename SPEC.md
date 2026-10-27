@@ -49,6 +49,10 @@ public enum BacktraceError: Error, Equatable, CustomStringConvertible {
 `Backtrace.currentThread()` returns the frames of the thread that calls it,
 with the innermost frame at index `0`.
 
+When the caller is executing inside a Swift concurrency task, the trace also
+contains the task's async continuation chain after the thread's own frames, so
+the frames that awaited or resumed the task are reported as well.
+
 ### FR-2: Main thread
 
 `Backtrace.mainThread()` returns the frames of the process' main thread. It

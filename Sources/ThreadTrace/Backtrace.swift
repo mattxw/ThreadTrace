@@ -45,11 +45,11 @@ public struct Backtrace: Sendable, CustomStringConvertible {
     ///   above `1024` as `1024`.
     public static func currentThread(maximumFrameCount: Int = 128) throws -> Backtrace {
         let limit = clamp(maximumFrameCount)
-        let addresses = SystemUnwinder.capture(limit: limit)
-        guard !addresses.isEmpty else {
+        let result = SystemUnwinder.capture(limit: limit)
+        guard !result.addresses.isEmpty else {
             throw BacktraceError.noFrames
         }
-        return build(addresses: addresses, isTruncated: addresses.count >= limit)
+        return build(addresses: result.addresses, isTruncated: result.isTruncated)
     }
 
     /// Captures the stack trace of the process' main thread.

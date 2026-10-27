@@ -108,8 +108,10 @@ swift run ThreadTraceDemo
 
 ## How it works
 
-- The calling thread is captured with the system stack unwinder, which works
-  even when frame pointers are omitted.
+- The calling thread is captured with the system stack unwinder
+  (`backtrace_async`), which works even when frame pointers are omitted. Inside
+  a Swift concurrency task the trace also includes the async continuation
+  chain, so the frames that awaited the task are reported.
 - Other threads (including the main thread when called from a background
   thread) are captured by reading their registers and walking the frame
   pointer chain.

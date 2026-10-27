@@ -31,12 +31,12 @@ enum Symbolication {
 
         let image = String(cString: imagePath).split(separator: "/").last.map(String.init) ?? "<unknown>"
 
-        if let symbolName = info.dli_sname {
-            let symbolAddress = UInt(bitPattern: info.dli_saddr)
+        if let symbolName = info.dli_sname, let symbolAddress = info.dli_saddr {
+            let symbolStart = UInt(bitPattern: symbolAddress)
             return ResolvedImage(
                 image: image,
                 symbol: String(cString: symbolName),
-                offset: address >= symbolAddress ? address - symbolAddress : 0
+                offset: address >= symbolStart ? address - symbolStart : 0
             )
         }
 
@@ -46,5 +46,37 @@ enum Symbolication {
             symbol: nil,
             offset: address >= imageBase ? address - imageBase : 0
         )
+    }
+
+    /// Whether `instruction` and `returnAddress` resolve to the same symbol.
+    ///
+    /// A link register that still points into the sampled function, rather
+    /// than at its caller, can be recognized this way.
+    static func isSameSymbol(_ instruction: UInt, _ returnAddress: UInt) -> Bool {
+        guard instruction > 0, returnAddress > 0 else {
+            return false
+        }
+        guard let instructionPointer = UnsafeRawPointer(bitPattern: instruction) else {
+            return false
+        }
+        guard let returnPointer = UnsafeRawPointer(bitPattern: returnAddress - 1) else {
+            return false
+        }
+
+        var instructionInfo = Dl_info()
+        var returnInfo = Dl_info()
+        guard dladdr(instructionPointer, &instructionInfo) != 0 else {
+            return false
+        }
+        guard dladdr(returnPointer, &returnInfo) != 0 else {
+            return false
+        }
+        guard let instructionSymbol = instructionInfo.dli_sname else {
+            return false
+        }
+        guard let returnSymbol = returnInfo.dli_sname else {
+            return false
+        }
+        return instructionInfo.dli_fbase == returnInfo.dli_fbase && strcmp(instructionSymbol, returnSymbol) == 0
     }
 }
