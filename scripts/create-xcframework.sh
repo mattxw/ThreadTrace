@@ -11,6 +11,13 @@
 # BUILD_LIBRARY_FOR_DISTRIBUTION emits .swiftinterface files so clients built
 # with a compatible compiler can import the module.
 #
+# The framework binary itself is a static archive created with libtool, not a
+# dylib. The consuming app links only the code it uses, so app thinning and
+# dead stripping are decided at the app's final link, not here.
+#
+# Optimizations use Release's -O. -Osize was measured larger for this module,
+# so it is not the default; override with SWIFT_OPTIMIZATION_LEVEL=-Osize.
+#
 # Usage: scripts/create-xcframework.sh [output-directory]
 #
 set -euo pipefail
@@ -21,6 +28,7 @@ OUT="${1:-"$ROOT/build"}"
 BUILD="$OUT/xcodebuild"
 STAGE="$OUT/stage"
 XCF="$OUT/$NAME.xcframework"
+OPTIMIZATION_LEVEL="${SWIFT_OPTIMIZATION_LEVEL:--O}"
 IOS_FAMILY='<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>'
 
 cd "$ROOT"
@@ -43,6 +51,7 @@ build() {
         ARCHS="$archs" \
         ONLY_ACTIVE_ARCH=NO \
         BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+        SWIFT_OPTIMIZATION_LEVEL="$OPTIMIZATION_LEVEL" \
         build
 }
 
@@ -84,6 +93,15 @@ stage() {
     mkdir -p "$framework/Headers" "$framework/Modules"
     libtool -static -o "$framework/$NAME" "$product/$NAME.o"
     cp -R "$product/$NAME.swiftmodule" "$framework/Modules/"
+
+    # A binary-only .swiftmodule is not module stable across compiler versions.
+    # The interface is what lets clients with another compatible Swift compiler
+    # import the module.
+    if [ -z "$(find "$framework/Modules/$NAME.swiftmodule" -maxdepth 1 -name '*.swiftinterface' -print -quit)" ]; then
+        echo "error: $slice has no .swiftinterface; module stability is not guaranteed" >&2
+        exit 1
+    fi
+
     write_info_plist "$framework/Info.plist" "$platform" "$minimum_os" "$family"
 }
 
